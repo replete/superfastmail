@@ -1,0 +1,30 @@
+/* Shared palette for the popup and options page (light/dark; `data-theme` overrides the system). */
+/* Colours sampled from Fastmail's web app (reference/fastmail-{dark,light}.png, converted to sRGB). */
+/* `hidden` always hides, whatever display a class sets (e.g. a flex bar). */
+[hidden] { display: none !important; }
+:root {
+  color-scheme: light;
+  --bg: #ffffff; --fg: #1b1e20; --muted: #5b646c; --border: #e9ebee; --hover: #f4f6f5; --sel: #d1d5dd;
+  --bar: #233958; --bar-fg: #ffffff; --bar-hover: #ffffff1f;
+  --accent: #306bad; --accent-fg: #ffffff; --unread: #5775e4; --menu: #ffffff; --chip: #eaebec;
+  --dot-push: #22a34a; --dot-poll: #f59e0b; --dot-error: #dc2626;
+  /* reader (light values are estimates; dark ones are sampled) */
+  --rail-active: #4a5b75; --cb: #5b646c; --icon-hover: #1b1e20;
+  --btn: #eceef1; --btn-fg: #333d48; --icon: #5b646c; --card-border: #e2e5ea; --label: #e3e7ed; --label-bar: #233958;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #1b1e20; --fg: #d6d8da; --muted: #999ea3; --border: #2d3236; --hover: #2d3236; --sel: #34393b;
+    --bar: #262f3c; --bar-fg: #ffffff; --bar-hover: #ffffff1a;
+    --accent: #6ca8d2; --accent-fg: #1b1e20; --unread: #5775e4; --menu: #1d2226; --chip: #42474a;
+    --rail-active: #4d545e; --cb: #6b7076; --icon-hover: #ffffff; --btn: #2d3236; --btn-fg: #c1c5c8; --icon: #9ea2a6; --card-border: #37393b; --label: #333d48; --label-bar: #d6d8da;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1b1e20; --fg: #d6d8da; --muted: #999ea3; --border: #2d3236; --hover: #2d3236; --sel: #34393b;
+  --bar: #262f3c; --bar-fg: #ffffff; --bar-hover: #ffffff1a;
+  --accent: #6ca8d2; --accent-fg: #1b1e20; --unread: #5775e4; --menu: #1d2226; --chip: #42474a;
+  --rail-active: #4d545e; --cb: #6b7076; --icon-hover: #ffffff; --btn: #2d3236; --btn-fg: #c1c5c8; --icon: #9ea2a6; --card-border: #37393b; --label: #333d48; --label-bar: #d6d8da;
+}

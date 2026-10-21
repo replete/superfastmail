@@ -1,0 +1,47 @@
+{
+  "name": "super-fastmail",
+  "private": true,
+  "version": "1.0.0",
+  "author": "replete <odd.oak3428@fastmail.com>",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@10.32.1",
+  "scripts": {
+    "dev": "wxt",
+    "dev:firefox": "wxt -b firefox --mv3",
+    "build": "tsc --noEmit && wxt build",
+    "build:firefox": "tsc --noEmit && wxt build -b firefox --mv3",
+    "zip": "tsc --noEmit && wxt zip",
+    "zip:firefox": "tsc --noEmit && wxt zip -b firefox --mv3",
+    "typecheck": "tsc --noEmit",
+    "postinstall": "wxt prepare",
+    "test:e2e": "wxt build -b firefox --mv3 && node scripts/e2e-firefox.mjs",
+    "probe": "node --env-file=.env scripts/probe.mjs",
+    "probe:dav": "node --env-file=.env scripts/probe-dav.mjs",
+    "test:fake": "tsc --noEmit && FAKE_FASTMAIL=8766 wxt build -b firefox --mv3 && FAKE=8766 HEADLESS=1 node scripts/e2e-firefox.mjs",
+    "fake": "node scripts/fake-fastmail.mjs",
+    "tour": "FAKE_FASTMAIL=8766 wxt build -b firefox --mv3 && TOUR=.output-tour FAKE=8766 HEADLESS=1 node scripts/e2e-firefox.mjs",
+    "fake:firefox": "FAKE_FASTMAIL=1 wxt build -b firefox --mv3 && FAKE=1 WATCH=forever node scripts/e2e-firefox.mjs",
+    "fake:chrome": "FAKE_FASTMAIL=1 FAKE_SETUP=1 wxt build -b chrome --mv3 && node scripts/fake-chrome.mjs",
+    "test:e2e:live": "wxt build -b firefox --mv3 && node --env-file=.env scripts/e2e-firefox.mjs",
+    "test:push": "wxt build -b firefox --mv3 && WATCH=${WATCH:-180} node --env-file=.env scripts/e2e-firefox.mjs",
+    "live:firefox": "wxt build -b firefox --mv3 && WATCH=forever node --env-file=.env scripts/e2e-firefox.mjs",
+    "fresh:firefox": "wxt build -b firefox --mv3 && WATCH=forever FRESH=1 node scripts/e2e-firefox.mjs",
+    "icons": "node scripts/icons.mjs public/icon",
+    "sounds": "node scripts/encode-sounds.mjs"
+  },
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "puppeteer": "^25.14.0",
+    "selenium-webdriver": "^4.51.0",
+    "typescript": "^5.9.0",
+    "web-ext": "^10.8.0",
+    "wxt": "^0.21.4"
+  },
+  "dependencies": {
+    "@event-calendar/build": "^5.17.2",
+    "@fontsource/metropolis": "^5.3.0",
+    "ical.js": "^2.2.1",
+    "tsdav": "^2.5.0"
+  }
+}

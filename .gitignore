@@ -1,0 +1,15 @@
+.env
+node_modules
+.output
+.output-fake*
+.wxt
+*.log
+.DS_Store
+web-ext-artifacts
+web-ext.config.ts
+reference/
+.output-tour
+assets/sounds/source/
+
+# Working notes, kept locally
+DECISIONS.md

@@ -1,0 +1,91 @@
+// Trims silence from the sources in assets/sounds/source/ and encodes them to
+// assets/sounds/<name>.ogg (Opus), then writes lib/sounds.generated.ts (the picker list) so it
+// stays in sync with the files. wxt.config.ts copies the .ogg files (not the sources) into the
+// build at sounds/<name>.ogg.
+//   node scripts/encode-sounds.mjs [bitrate]
+// Default bitrate is Opus's "transparent" range: 128k for stereo, 96k for mono.
+//
+// Trimming is transient-safe: the start is found at -50 dB relative to the clip's peak and then
+// backed off by a 5 ms pre-roll (a 2 ms fade-in covers only that pre-roll); the end is found at
+// -60 dB and extended by 30 ms, faded over that tail, so attacks and decays are never cut.
+// Then 50 ms of digital silence goes in front: audio output that's just waking up drops its first
+// few milliseconds, which swallowed the attack of sounds that hit almost immediately (pop, bing).
+//
+// Levels are left exactly as supplied: softer sounds are meant to be softer.
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+
+const SRC = 'assets/sounds/source';
+const OUT = 'assets/sounds';
+const BITRATE = process.argv[2];
+const START_DB = -50, END_DB = -60, PREROLL = 0.005, TAIL = 0.03, FADE_IN = 0.002, LEAD_MS = 50;
+
+
+function probe(file) {
+  const [rate, channels] = execFileSync('ffprobe', ['-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=sample_rate,channels', '-of', 'csv=p=0', file])
+    .toString().trim().split(',').map(Number);
+  return { rate, channels };
+}
+
+function decode(file, rate, channels) {
+  const buf = execFileSync('ffmpeg', ['-v', 'error', '-i', file, '-f', 'f32le', '-ac', String(channels), '-ar', String(rate), '-'], { maxBuffer: 1 << 28 });
+  return new Float32Array(buf.buffer, buf.byteOffset, buf.length / 4);
+}
+
+/** Per-frame peak across channels. */
+function frames(samples, channels) {
+  const n = samples.length / channels, out = new Float32Array(n);
+  for (let i = 0; i < n; i++) for (let c = 0; c < channels; c++) out[i] = Math.max(out[i], Math.abs(samples[i * channels + c]));
+  return out;
+}
+
+const db = (x) => (x > 0 ? 20 * Math.log10(x) : -Infinity);
+fs.mkdirSync(OUT, { recursive: true });
+for (const f of fs.readdirSync(OUT)) if (f.endsWith('.ogg')) fs.unlinkSync(path.join(OUT, f));
+
+const rows = [];
+const list = [];
+for (const file of fs.readdirSync(SRC).filter((f) => /\.(mp3|wav|flac|ogg)$/.test(f)).sort()) {
+  const name = file.replace(/\.[^.]+$/, '');
+  const src = path.join(SRC, file);
+  const { rate, channels } = probe(src);
+  const env = frames(decode(src, rate, channels), channels);
+  const peak = env.reduce((m, v) => Math.max(m, v), 0);
+  const first = env.findIndex((v) => v > peak * 10 ** (START_DB / 20));
+  let last = env.length - 1;
+  while (last > 0 && env[last] <= peak * 10 ** (END_DB / 20)) last--;
+  const start = Math.max(0, first / rate - PREROLL);
+  const end = Math.min(env.length / rate, last / rate + TAIL);
+  const dur = end - start;
+  const fadeOut = Math.min(TAIL, dur / 4);
+
+  const out = path.join(OUT, `${name}.ogg`);
+  execFileSync('ffmpeg', [
+    // Trim with atrim after decoding from the start: seeking into an MP3 garbles the first frame
+    // (bit reservoir), which would soften any transient that lands just after the cut.
+    '-v', 'error', '-y', '-i', src,
+    '-af', `atrim=start=${start.toFixed(5)}:end=${end.toFixed(5)},asetpts=PTS-STARTPTS,afade=t=in:d=${FADE_IN},afade=t=out:st=${(dur - fadeOut).toFixed(5)}:d=${fadeOut.toFixed(5)},adelay=${LEAD_MS}:all=1,aresample=48000:filter_size=64:phase_shift=10:cutoff=0.97`,
+    '-c:a', 'libopus', '-b:a', BITRATE ?? (channels === 1 ? '96k' : '128k'), '-vbr', 'on', '-compression_level', '10', '-application', 'audio',
+    '-map_metadata', '-1', out,
+  ]);
+  // Verify the attack survived: onset in the encoded file should sit at ~the pre-roll.
+  const enc = frames(decode(out, 48000, channels), channels);
+  const encPeak = enc.reduce((m, v) => Math.max(m, v), 0);
+  const onset = enc.findIndex((v) => v > encPeak * 10 ** (START_DB / 20)) / 48;
+  rows.push([name, `${channels === 1 ? 'mono' : 'stereo'}`, ((first / rate) * 1000).toFixed(0), ((env.length / rate - last / rate) * 1000).toFixed(0),
+    (env.length / rate).toFixed(2), dur.toFixed(2), onset.toFixed(1), (fs.statSync(src).size / 1024).toFixed(0), (fs.statSync(out).size / 1024).toFixed(1)]);
+  list.push(name);
+}
+
+const head = ['sound', 'ch', 'lead ms', 'tail ms', 'src s', 'new s', 'onset ms', 'src KB', 'ogg KB'];
+console.log(head.map((h) => h.padStart(9)).join(''));
+for (const r of rows) console.log(r.map((c) => String(c).padStart(9)).join(''));
+const total = (i) => rows.reduce((s, r) => s + Number(r.at(i)), 0).toFixed(0);
+console.log(`total: ${total(-2)} KB → ${total(-1)} KB Opus (${BITRATE ?? '128k stereo / 96k mono'})`);
+
+const label = (n) => { const s = n.replace(/-/g, ' '); return s[0].toUpperCase() + s.slice(1); };
+fs.writeFileSync(
+  'lib/sounds.generated.ts',
+  ['// Generated by scripts/encode-sounds.mjs — do not edit.', 'export const SOUND_FILES = [', ...list.map((n) => `  ['${n}', '${label(n)}'],`), '] as const;', ''].join('\n'),
+);

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 92 72">
+  <!-- Tile-less mark for use on the navy top bar. -->
+  <defs><clipPath id="env"><rect width="92" height="72" rx="10"/></clipPath></defs>
+  <rect width="92" height="72" rx="10" fill="#ffffff"/>
+  <g clip-path="url(#env)">
+    <path d="M0 0 H46 V46 Z" fill="#f5b81c"/>
+    <path d="M46 0 H92 L46 46 Z" fill="#3d8fd9"/>
+  </g>
+</svg>

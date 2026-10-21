@@ -1,0 +1,105 @@
+name: Release
+
+# Pushing a v* tag type-checks, tests and builds the extension, then publishes a GitHub release with the
+# Firefox and Chrome zips, the Firefox .xpi and the sources zip add-on review asks for. With the AMO_JWT_ISSUER
+# and AMO_JWT_SECRET secrets set (addons.mozilla.org → Developer Hub → Manage API Keys), the .xpi is signed
+# by Mozilla as an unlisted (self-distributed) add-on, so release Firefox installs it; without them it's
+# unsigned (Firefox Developer Edition, Nightly or LibreWolf with signature checks off). Store listings are separate.
+# "Run workflow" rehearses everything without publishing; the zips are kept as a workflow artifact.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write # create the GitHub release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      # Empty when not set, which skips signing (a step's `if` can't read secrets directly).
+      AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+      AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Enable pnpm (the version in package.json)
+        run: corepack enable
+
+      - name: Use Node.js 24.x
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check the tag matches package.json
+        if: github.event_name == 'push'
+        run: test "$GITHUB_REF_NAME" = "v$(node -p "require('./package.json').version")" || (echo "::error::Tag $GITHUB_REF_NAME does not match the version in package.json" && exit 1)
+
+      - name: Take the release notes from CHANGELOG.md
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          awk -v heading="## $VERSION" '$0 == heading { found = 1; next } /^## / { found = 0 } found' CHANGELOG.md > notes.md
+          test -s notes.md || (echo "::error::CHANGELOG.md has no section for $VERSION" && exit 1)
+          cat notes.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Type check
+        run: pnpm typecheck
+
+      - name: Install Firefox for the tests
+        run: |
+          FIREFOX=$(pnpm exec puppeteer browsers install firefox | tail -1 | awk '{print $2}')
+          test -x "$FIREFOX" || (echo "::error::Firefox not found at $FIREFOX" && exit 1)
+          echo "FIREFOX_BIN=$FIREFOX" >> "$GITHUB_ENV"
+
+      - name: Run tests (against the fake Fastmail server)
+        run: pnpm test:fake
+
+      - name: Build the zips
+        run: |
+          pnpm exec wxt zip -b firefox --mv3
+          pnpm exec wxt zip -b chrome
+
+      - name: Add the Firefox .xpi (unsigned)
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          cp ".output/super-fastmail-$VERSION-firefox.zip" ".output/super-fastmail-$VERSION-firefox-unsigned.xpi"
+
+      # Only for a real release: each version can be signed once, and it's sent to Mozilla for review.
+      - name: Sign the Firefox .xpi with Mozilla (unlisted)
+        if: github.event_name == 'push' && env.AMO_JWT_ISSUER != ''
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          pnpm exec web-ext sign --no-config-discovery --source-dir .output/firefox-mv3 --channel unlisted \
+            --api-key "$AMO_JWT_ISSUER" --api-secret "$AMO_JWT_SECRET" \
+            --upload-source-code ".output/super-fastmail-$VERSION-sources.zip" \
+            --artifacts-dir .output/signed --approval-timeout 1200000
+          mv .output/signed/*.xpi ".output/super-fastmail-$VERSION-firefox.xpi"
+
+      - name: Check the builds are the real ones (no fake-server access)
+        run: |
+          for m in .output/firefox-mv3/manifest.json .output/chrome-mv3/manifest.json; do
+            if grep -q "127.0.0.1" "$m"; then echo "::error::$m allows the fake server"; exit 1; fi
+          done
+          ls -l .output/*.zip .output/*.xpi
+
+      - name: Keep the zips (rehearsal)
+        if: github.event_name != 'push'
+        uses: actions/upload-artifact@v7
+        with:
+          name: zips
+          path: |
+            .output/*.zip
+            .output/*.xpi
+
+      - name: Create the GitHub release
+        if: github.event_name == 'push'
+        run: gh release create "$GITHUB_REF_NAME" .output/*.zip .output/*.xpi --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag
+        env:
+          GH_TOKEN: ${{ github.token }}

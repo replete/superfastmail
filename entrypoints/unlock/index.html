@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Unlock Super Fastmail</title>
+  <style>
+    body { font: 14px/1.35 Metropolis, system-ui, "Segoe UI", Roboto, Ubuntu, Cantarell, "Noto Sans", -apple-system, Arial, sans-serif;
+      margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--fg); }
+    button { font: inherit; cursor: pointer; color: inherit; }
+    main { display: grid; justify-items: center; gap: 12px; padding: 20px; text-align: center; }
+    main > svg { width: 36px; height: 36px; color: var(--muted); }
+    h3 { margin: 0; font-size: 16px; }
+    #msg { color: var(--muted); font-size: 13px; min-height: 1.35em; }
+    #msg.err { color: var(--dot-error); }
+    #msg.ok { color: var(--dot-push); }
+    .actions { display: flex; gap: 8px; }
+    .pill { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px; border: 0; border-radius: 6px;
+      background: var(--btn); color: var(--btn-fg); font-size: 13.5px; }
+    .pill.primary { background: var(--accent); color: var(--accent-fg); }
+    .pill:hover { filter: brightness(1.15); }
+  </style>
+</head>
+<body>
+  <main>
+    <span id="icon"></span>
+    <h3 id="title">Unlock Super Fastmail</h3>
+    <div id="msg"></div>
+    <div class="actions">
+      <button id="retry" class="pill primary" hidden>Try again</button>
+      <button id="close" class="pill">Cancel</button>
+    </div>
+  </main>
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="12 12 104 104">
+  <!-- Toolbar icon: the logo's envelope alone (clearer at 16px). The outline keeps the white body visible on light toolbars. -->
+  <defs><clipPath id="env"><rect x="18" y="28" width="92" height="72" rx="10"/></clipPath></defs>
+  <rect x="18" y="28" width="92" height="72" rx="10" fill="#ffffff"/>
+  <g clip-path="url(#env)">
+    <path d="M18 28 H64 V74 Z" fill="#f5b81c"/>
+    <path d="M64 28 H110 L64 74 Z" fill="#3d8fd9"/>
+  </g>
+  <rect x="18" y="28" width="92" height="72" rx="10" fill="none" stroke="#1b2b45" stroke-width="5"/>
+</svg>

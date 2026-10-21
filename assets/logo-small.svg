@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- 16/32px variant of logo.svg: no speed streaks, larger centred envelope. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2c4a78"/>
+      <stop offset="1" stop-color="#1b2b45"/>
+    </linearGradient>
+    <clipPath id="env"><rect x="18" y="28" width="92" height="72" rx="10"/></clipPath>
+  </defs>
+  <rect x="0" y="0" width="128" height="128" rx="28" fill="url(#tile)"/>
+  <rect x="18" y="28" width="92" height="72" rx="10" fill="#ffffff"/>
+  <g clip-path="url(#env)">
+    <path d="M18 28 H64 V74 Z" fill="#f5b81c"/>
+    <path d="M64 28 H110 L64 74 Z" fill="#3d8fd9"/>
+  </g>
+</svg>

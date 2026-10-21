@@ -1,0 +1,797 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Super Fastmail</title>
+  <meta name="manifest.type" content="browser_action" />
+  <style>
+    [hidden] { display: none !important; }
+    html { overflow: hidden; }
+    /* Firefox caps popups at 800x600. */
+    /* Fastmail frame: top bar + app rail share one colour; the main panel is inset with a rounded corner. */
+    body { font: 14px/1.35 Metropolis, system-ui, "Segoe UI", Roboto, Ubuntu, Cantarell, "Noto Sans", -apple-system, Arial, sans-serif; width: 680px; height: 580px; margin: 0;
+      overflow: hidden; background: var(--bar); color: var(--fg);
+      --rail: 52px;
+      display: grid; grid-template: "head head" 46px "rail main" minmax(0, 1fr) / var(--rail) minmax(0, 1fr); }
+    /* clip, not hidden: nothing (e.g. scrollIntoView) can scroll the sliding panes sideways. */
+    #panel { grid-area: main; position: relative; overflow: clip; background: var(--bg); border-top-left-radius: 12px; }
+    .rail { grid-area: rail; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 4px 0 10px; }
+    .rail-btn { display: grid; place-items: center; width: 38px; height: 38px; border: 0; border-radius: 8px; background: none; color: var(--bar-fg); opacity: 0.8; }
+    .rail-btn:hover { opacity: 1; background: var(--bar-hover); }
+    .rail-btn.on { opacity: 1; background: var(--rail-active); }
+    /* A message set aside, still being written. */
+    .rail-btn.waiting { position: relative; opacity: 1; }
+    .rail-btn.waiting::after { content: ''; position: absolute; top: 7px; right: 7px; width: 9px; height: 9px; border-radius: 50%; background: var(--dot-error); box-shadow: 0 0 0 2px var(--bar); }
+    /* Made-up data: a small marker fixed in the bottom right, out of the way. */
+    .fakechip { position: fixed; right: 8px; bottom: 6px; z-index: 40; font-size: 9px; line-height: 1; font-weight: 700; letter-spacing: 0.06em;
+      padding: 3px 5px; border-radius: 3px; background: #d97706; color: #fff; opacity: 0.9; pointer-events: none; }
+    .rail-btn:disabled, .app:disabled { opacity: 0.35; cursor: default; pointer-events: none; }
+    .rail-btn.on:disabled { opacity: 1; }
+    .rail-btn svg { width: 20px; height: 20px; }
+    body.popout { width: 100vw; height: 100vh; }
+    button { font: inherit; cursor: pointer; color: inherit; }
+    button:disabled { opacity: 0.35; cursor: default; }
+    /* Views switch in place (no slide): list, message, compose, search results. */
+    #slider { display: flex; width: 200%; height: 100%; }
+    body.reading #slider { transform: translateX(-50%); }
+    #slider > section { width: 50%; height: 100%; display: flex; flex-direction: column; min-width: 0; }
+    .spacer { flex: 1; }
+
+    body > header { grid-area: head; display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 0 8px 0 0;
+      background: var(--bar); color: var(--bar-fg); position: relative; }
+    /* Logo button is centred over the rail; the address starts where the main panel starts. */
+    .brand { display: flex; align-items: center; min-width: 0; gap: 8px; }
+    /* The logo's centre sits on the rail's centre (26px): 26 - 19/2 logo - 6 pill padding = 10.5px. */
+    .logo-btn { height: 46px; flex: none; display: flex; align-items: center; border: 0; background: none; padding: 0 0 0 calc(var(--rail) / 2 - 15.5px); }
+    .logo-pill { display: flex; align-items: center; gap: 2px; padding: 7px 4px 7px 6px; border-radius: 6px; }
+    .logo-btn .logo { width: 19px; height: auto; }
+    .logo-chev { display: grid; opacity: 0.75; }
+    .logo-chev svg { width: 10px; height: 10px; }
+    .logo-btn:hover .logo-pill, .logo-btn[aria-expanded="true"] .logo-pill { background: var(--bar-hover); }
+    /* Fastmail-style app switcher */
+    .apps-menu { position: absolute; left: 6px; top: 44px; z-index: 10; display: grid; grid-template-columns: repeat(3, 92px); gap: 4px;
+      padding: 8px; background: var(--menu); color: var(--fg); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 28px #0000004d; }
+    .apps-menu .head { grid-column: 1 / -1; font-size: 12px; color: var(--muted); padding: 2px 6px 6px; }
+    .app { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 4px 10px; border: 0; border-radius: 8px; background: none; font-size: 13px; }
+    .app:hover, .app.on { background: var(--sel); }
+    .app svg { width: 28px; height: 28px; color: var(--icon); }
+    .app.on svg { color: #3d8fd9; }
+    .account { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 360px; }
+    .acount { font-size: 13.5px; font-weight: 600; margin-left: -4px; white-space: nowrap; opacity: 0.85; }
+    .acount:empty { display: none; }
+    .tabs .count { font-weight: 400; color: var(--muted); margin-left: 2px; }
+    button.icon { display: inline-grid; place-items: center; border: 0; background: none; width: 32px; height: 32px; border-radius: 6px; padding: 0; }
+    body > header button.icon:hover { background: var(--bar-hover); }
+    #refresh.spinning svg { animation: spin 0.7s linear infinite; }
+    #refresh.failed { color: var(--dot-error); }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .bar button.icon:hover:not(:disabled) { background: var(--hover); }
+    /* Do Not Disturb is on: the bell stays lit. */
+    #dndBtn.on { background: var(--bar-hover); box-shadow: inset 0 0 0 1px #ffffff40; }
+    #menu .head { padding: 4px 14px 6px; font-size: 12px; color: var(--muted); }
+    #menu .head #dndState { font-weight: 600; color: var(--fg); margin-left: 4px; }
+    #menu .head #dndState:empty { display: none; }
+
+    .listbar { display: flex; align-items: center; padding: 0 12px; border-bottom: 1px solid var(--border); min-height: 42px; }
+    /* First tab lines up with the sender column: 12 pad + 13 cb + 10 + 14 pin + 10 + 10 dot + 10 = 79. */
+    .tabs { display: flex; gap: 18px; margin-left: 54px; }
+    .search { margin-left: auto; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; width: 170px;
+      border-radius: 6px; background: var(--btn); color: var(--icon); }
+    .search svg { width: 15px; height: 15px; flex: none; }
+    .search > span:first-child { position: relative; top: 2px; }
+    .search input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; color: var(--fg); font: inherit; font-size: 13px; }
+    .search button { display: grid; border: 0; background: none; padding: 0; color: var(--icon); }
+    .search:focus-within { outline: 1px solid var(--accent); }
+    .results { padding: 8px 18px 0; color: var(--muted); font-size: 12.5px; }
+    .bulk { display: flex; align-items: center; gap: 6px; flex: 1; margin-left: 54px; }
+    .bulk .n { font-weight: 600; margin-right: 6px; white-space: nowrap; }
+    .bulk .pill { white-space: nowrap; }
+    .listbar:has(.bulk:not([hidden])) .search { display: none; }
+    .bulk .pill { height: 28px; }
+    /* Tab buttons only (not the folder picker's caret or menu items). */
+    .tabs button[data-v] { border: 0; background: none; padding: 11px 0 9px; font-size: 14px; font-weight: 600; color: var(--muted); border-bottom: 2px solid transparent; }
+    .tabs button[data-v].on { color: var(--fg); border-bottom-color: var(--accent); }
+    body.searching .tabs button[data-v].on { color: var(--muted); border-bottom-color: transparent; }
+
+    /* Folder picker on the first tab */
+    .ftab { position: relative; display: inline-flex; align-items: center; }
+    .tabs button[data-v="inbox"] { display: inline-flex; align-items: center; }
+    .fcaret { display: inline-grid; place-items: center; width: 16px; height: 18px; color: inherit; margin-left: 2px; border-radius: 4px; }
+    .fcaret:hover { background: var(--hover); color: var(--fg); }
+    .fcaret svg { width: 13px; height: 13px; }
+    #folderMenu, #moveMenu { min-width: 240px; max-height: 360px; overflow-y: auto; padding: 6px 0; }
+    #moveMenu { position: fixed; z-index: 30; }
+    #moveFilter, #folderFilter { display: block; width: calc(100% - 16px); margin: 0 8px 6px; font: inherit; font-size: 13px; color: var(--fg); background: var(--bg);
+      border: 1px solid var(--card-border); border-radius: 6px; padding: 4px 8px; box-sizing: border-box; }
+    #folderList .mi, #moveList .mi { font-size: 13px; padding-top: 5px; padding-bottom: 5px; }
+    #folderList .mi.on { color: var(--accent); font-weight: 600; }
+    #folderList .mi.first, #moveList .mi.first { background: var(--hover); }
+    #folderList .mhint, #moveList .mhint { padding: 6px 12px; color: var(--muted); font-size: 12.5px; }
+    /* Small dropdowns (reader "More") */
+    /* Not built yet: hidden rather than greyed out (a dead button just confuses). */
+    .pill.soon { display: none; }
+    .rmore-wrap { position: relative; }
+    .dropmenu { position: absolute; left: 0; top: calc(100% + 4px); z-index: 10; min-width: 200px; padding: 4px 0; color: var(--fg);
+      background: var(--menu); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 28px #0000004d; }
+    .dropmenu .mi { font-size: 13px; padding: 6px 12px; }
+    /* Undo toast, after Fastmail's "Message sent · Undo" */
+    .toast { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 20; display: flex; align-items: center;
+      gap: 6px; padding: 6px 6px 6px 14px; border-radius: 8px; background: #2b2f33; color: #fff; box-shadow: 0 6px 20px #0006;
+      font-size: 13px; white-space: nowrap; }
+    .toast.err { background: #8f1d1d; }
+    .toast .tbtn { border: 0; background: none; color: #8cc4ff; font-weight: 600; padding: 4px 8px; border-radius: 6px; }
+    .toast .tbtn:hover { background: #ffffff1a; }
+    .toast .tx { display: grid; place-items: center; border: 0; background: none; color: #fffc; width: 24px; height: 24px; border-radius: 6px; }
+    .toast .tx:hover { background: #ffffff1a; }
+    .toast .tx svg { width: 14px; height: 14px; }
+    #menu { position: absolute; right: 8px; top: 44px; z-index: 10; min-width: 250px; padding: 6px 0; color: var(--fg);
+      background: var(--menu); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 28px #0000004d; }
+    .mi { display: flex; align-items: center; gap: 12px; width: 100%; border: 0; background: none; padding: 7px 14px; text-align: left; }
+    .mi:hover { background: var(--hover); }
+    .mi > svg, .mi .chk svg { width: 18px; height: 18px; flex: none; }
+    .mi > svg { color: var(--muted); }
+    .mi .label { flex: 1; }
+    .mi .hint { color: var(--muted); font-size: 12px; }
+    .mi .chev { display: inline-grid; color: var(--muted); }
+    .mi .chev svg { width: 16px; height: 16px; transition: transform 0.15s; }
+    .mi[aria-expanded="true"] .chev svg { transform: rotate(90deg); }
+    /* Sub-items line up with their parent's label: 14px pad + 18px icon slot + 12px gap. */
+    .group .mi { padding-left: 44px; font-size: 13px; padding-top: 6px; padding-bottom: 6px; }
+    .group .mi.radio { padding-left: 14px; }
+    .mi .chk { display: inline-grid; width: 18px; color: var(--accent); }
+    .mi.radio:not(.on) .chk { visibility: hidden; }
+    .sep { height: 1px; background: var(--border); margin: 6px 0; }
+
+    .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: #888; cursor: help; }
+    .dot.push { background: var(--dot-push); }
+    .dot.poll { background: var(--dot-poll); }
+    .dot.error { background: var(--dot-error); }
+
+    #body { flex: 1; overflow-y: auto; }
+    #listPane { position: relative; }
+    #listPane ul { padding-bottom: 64px; } /* room for the floating Compose button */
+    .fab { position: absolute; right: 16px; bottom: 16px; display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 16px;
+      border: 0; border-radius: 8px; background: var(--accent); color: var(--accent-fg); font-weight: 600; font-size: 14px;
+      box-shadow: 0 4px 14px #00000059; }
+    .fab svg { width: 17px; height: 17px; }
+    .fab:hover:not([aria-disabled="true"]) { filter: brightness(1.08); }
+    .fab[aria-disabled="true"] { background: var(--btn); color: var(--btn-fg); opacity: 0.6; box-shadow: none; }
+    #body ul { list-style: none; margin: 0; padding: 4px 6px; }
+    /* Fastmail-style row: unread dot | sender | subject + preview | time */
+    /* Fastmail-style checkbox: rounded outline, accent fill with a white tick when checked. */
+    input.cb { appearance: none; margin: 0; width: 13px; height: 13px; border: 1.5px solid var(--cb); border-radius: 3px;
+      background: none; cursor: pointer; display: grid; place-content: center; flex: none; }
+    input.cb:hover { border-color: var(--fg); }
+    input.cb:checked, input.cb:indeterminate { background: var(--accent); border-color: var(--accent); }
+    input.cb:checked::after { content: ""; width: 7px; height: 4px; margin-top: -2px; border: solid #fff; border-width: 0 0 1.75px 1.75px; transform: rotate(-45deg); }
+    input.cb:indeterminate::after { content: ""; width: 7px; border-top: 1.75px solid #fff; }
+    #body li { position: relative; display: grid; grid-template-columns: 13px 14px 10px 140px minmax(0, 1fr) 16px auto; align-items: center; column-gap: 10px;
+      padding: 8px 6px; border-radius: 8px; cursor: pointer; }
+    #body li:hover { background: var(--sel); }
+    /* Pin: red when pinned, grey hint on hover otherwise. */
+    .pin { display: grid; color: var(--icon); visibility: hidden; }
+    .pin svg { width: 14px; height: 14px; }
+    #body li:hover .pin, .pin.on { visibility: visible; }
+    .pin.on { color: #e5534b; }
+    .pin.on svg { fill: currentColor; }
+    .att { display: grid; color: var(--icon); }
+    .att svg { width: 14px; height: 14px; }
+    /* Hover actions over the right end of the row: a see-through backing (the row shows faintly
+       underneath), full-height targets, colour alone on hover. */
+    .hover-actions { position: absolute; right: 4px; top: 0; bottom: 0; display: none; align-items: center; gap: 0;
+      padding-left: 10px; background: color-mix(in srgb, var(--sel) 82%, transparent); user-select: none; }
+    #body li:hover .hover-actions { display: flex; }
+    .hover-actions::before { content: ""; position: absolute; top: 0; bottom: 0; left: -24px; width: 24px;
+      background: linear-gradient(to right, transparent, color-mix(in srgb, var(--sel) 82%, transparent)); }
+    .hover-actions button { display: grid; place-items: center; width: 34px; height: 100%; min-height: 32px; border: 0; background: none; color: var(--icon); cursor: pointer; }
+    .hover-actions button:hover { color: var(--fg); }
+    .hover-actions button svg { width: 17px; height: 17px; }
+    [aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
+    #body li.sel, #body li.checked { background: var(--sel); }
+    .udot { width: 7px; height: 7px; border-radius: 50%; justify-self: center; }
+    #body li:not(.read) .udot { background: var(--unread); }
+    .from { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .main { min-width: 0; }
+    .subj, .prev { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .subj { font-size: 14px; }
+    .prev { color: var(--muted); font-size: 12.5px; }
+    .time { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+    #body li:not(.read) :is(.from, .subj, .time) { font-weight: 600; color: var(--fg); }
+    body.compact #body li { padding: 4px 6px; }
+    body.compact .prev { display: none; }
+    .msg { padding: 24px 16px; color: var(--muted); }
+    /* Lock screen */
+    .lock { display: grid; justify-items: center; gap: 12px; padding: 48px 24px; text-align: center; }
+    .lock > svg { width: 36px; height: 36px; color: var(--muted); }
+    .lock h3 { margin: 0; font-size: 16px; }
+    .lock .pill.primary { height: 36px; padding: 0 18px; font-size: 14px; }
+    .lock form { display: flex; gap: 6px; }
+    .lock input { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--card-border); border-radius: 6px; padding: 6px 9px; width: 200px; }
+    .lock .or { color: var(--muted); font-size: 12.5px; }
+    .lock p { margin: 0; max-width: 300px; color: var(--muted); }
+    .lock .linkish { border: 0; background: none; padding: 0; color: var(--muted); font-size: 12.5px; text-decoration: underline; }
+    .lock .err { color: var(--dot-error); font-size: 12.5px; min-height: 1em; }
+    .msg input { padding: 6px; }
+
+    /* Reader, after Fastmail's conversation view */
+    .bar { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--btn); }
+    .pill { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border: 0; border-radius: 6px;
+      background: var(--btn); color: var(--btn-fg); font-size: 13.5px; }
+    .pill svg { width: 16px; height: 16px; flex: none; }
+    .pill .caret svg { width: 14px; height: 14px; }
+    .pill.icon-only { width: 40px; padding: 0; justify-content: center; }
+    .pill:hover:not(:disabled) { filter: brightness(1.15); }
+    .bar button.icon { color: var(--icon); }
+    .rhead { display: flex; align-items: flex-start; gap: 8px; padding: 14px 16px 10px; }
+    .rhead h2 { flex: 1; font-size: 17px; font-weight: 700; margin: 0; overflow-wrap: anywhere; }
+    .rhead button.icon { color: var(--icon); width: 28px; height: 28px; }
+    .rhead button.icon:hover { background: var(--hover); }
+    .rhead button.icon.on { color: var(--accent); }
+    .labels { padding: 0 16px 10px; display: flex; gap: 6px; }
+    .mailbox-chip { background: var(--label); border-left: 2px solid var(--label-bar); padding: 2px 8px; font-size: 12px; border-radius: 2px; }
+    /* Conversation: one scrolling column; messages expand in place (several can be open). */
+    #conv { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 12px; }
+    #msgs { display: grid; gap: 6px; margin: 0 12px; }
+    .cmsg { border: 1px solid var(--card-border); border-radius: 8px; background: var(--bg); box-shadow: 0 1px 6px #0000002e; overflow: hidden; }
+    .cmsg.closed { box-shadow: none; }
+    .cmsg > .mhead { cursor: pointer; }
+    .cmsg.closed .mhead { display: none; }
+    .tmsg { display: grid; grid-template-columns: 26px 130px minmax(0, 1fr) auto; gap: 10px; align-items: center; width: 100%; padding: 5px 12px;
+      border: 0; background: none; color: var(--fg); text-align: left; font-size: 13px; }
+    .cmsg.open .tmsg { display: none; }
+    .tmsg:hover { background: var(--hover); }
+    .tmsg .avatar { width: 26px; height: 26px; font-size: 11px; }
+    .tmsg .tn { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .cmsg.unread .tmsg .tn { color: var(--unread); }
+    .tmsg .tp { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tmsg .td { color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .tmore { border: 1px dashed var(--card-border); border-radius: 8px; background: none; color: var(--accent); font-size: 12.5px; padding: 4px; }
+    .cmsg.closed .mbody { display: none; }
+    .cmsg.open .mbody { animation: unfold 0.18s ease-out; }
+    @keyframes unfold { from { opacity: 0; transform: translateY(-4px); } }
+    .mframe { display: block; width: 100%; height: 40px; border: 0; background: var(--bg); }
+    .mbody .mfoot:empty { display: none; }
+    .convfoot { border: 0; padding: 10px 12px 0; }
+    #replyHost:not(:empty) { margin: 10px 12px 0; }
+    /* New message: its own pane in place of the conversation. */
+    #composeNew { display: none; flex: 1; min-height: 0; overflow-y: auto; padding: 12px; }
+    body.composeNew #composeNew { display: block; }
+    body.composeNew #conv { display: none; }
+    /* A new message isn't an email in a folder: no archive / delete / move / next. */
+    body.composeNew #readPane .bar > :not(#back):not(.spacer):not(.cnew) { display: none; }
+    /* A new message: save or discard it beside Back (the composer's own trash and close are for replies). */
+    #readPane .bar > .cnew { display: none; }
+    body.composeNew #readPane .bar > .cnew { display: inline-flex; }
+    #composeNew .cdiscard, #composeNew .cclose { display: none; }
+    body.composing .convfoot { display: none; }
+    /* Compose, after Fastmail's: one padded card; field rows separated by lines; a dark rounded toolbar. */
+    .composer { padding: 0 16px 12px; border: 1px solid var(--card-border); border-radius: 8px; background: var(--bg); box-shadow: 0 1px 6px #0000002e; position: relative; }
+    .cbar { display: flex; align-items: center; gap: 8px; padding: 10px 0 6px; }
+    .cbar .cstatus { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .cbar .cstatus.err { color: var(--dot-error); }
+    .cbar button.icon, .ctools button.icon { display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 6px; background: none; color: var(--icon); }
+    .cbar button.icon:hover, .ctools button.icon:hover { background: var(--hover); color: var(--icon-hover); }
+    .cbar svg, .ctools svg { width: 17px; height: 17px; }
+    .csendwrap { position: relative; display: inline-flex; }
+    .csendwrap .csend { border-radius: 6px 0 0 6px; }
+    .csendwrap .csend:only-of-type { border-radius: 6px; }
+    .csendwrap .ccaret { border-radius: 0 6px 6px 0; margin-left: 1px; width: 28px; padding: 0; justify-content: center; }
+    .cschedule { top: calc(100% + 4px); left: 0; min-width: 270px; }
+    .cschedule .mhint { padding: 6px 12px 4px; font-weight: 600; font-size: 12.5px; }
+    .cschedule .mi:disabled { opacity: 0.45; cursor: default; }
+    .cschedule .mi:disabled:hover { background: none; }
+    .cpickrow { display: flex; gap: 6px; padding: 6px 12px 8px; }
+    .cpickrow input { flex: 1; font: inherit; font-size: 13px; color: var(--fg); background: var(--bg); border: 1px solid var(--card-border); border-radius: 6px; padding: 3px 6px; color-scheme: inherit; }
+    .cfield { display: flex; align-items: center; gap: 10px; padding: 0; min-height: 34px; border-bottom: 1px solid var(--border); }
+    .cfield label { width: 58px; flex: none; font-weight: 600; font-size: 13.5px; }
+    .cfield select, .cfield .csubject { flex: 1; min-width: 0; font: inherit; color: var(--fg); background: none; border: 0; padding: 2px 0; outline: none; border-radius: 0; height: 26px; }
+    /* A plain select (Firefox's native one has a rounded hover background). */
+    .cfield select { appearance: none; padding-right: 18px; cursor: pointer; background: no-repeat right 2px center / 12px
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23999ea3' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); }
+    .cfield select option { background: var(--menu); color: var(--fg); }
+    .chips { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; cursor: text; }
+    .chips { padding: 3px 0; }
+    .chips input { flex: 1; min-width: 120px; font: inherit; color: var(--fg); background: none; border: 0; outline: none; padding: 2px 0; height: 24px; }
+    .chip { display: inline-flex; align-items: center; gap: 2px; padding: 0 2px 0 8px; height: 22px; border-radius: 11px; background: var(--chip); font-size: 13px; }
+    .chip.invalid { background: none; border: 1px solid var(--dot-error); color: var(--dot-error); }
+    .chip .x { display: grid; place-items: center; width: 18px; height: 18px; border: 0; border-radius: 50%; background: none; color: var(--muted); padding: 0; }
+    .chip .x:hover { background: var(--hover); }
+    .chip .x svg { width: 11px; height: 11px; }
+    .ctoggle { border: 0; background: none; color: var(--muted); font-size: 13px; padding: 0 4px; line-height: 24px; }
+    .ctoggle:hover { color: var(--fg); }
+    .ctools { display: flex; align-items: center; gap: 2px; margin: 10px 0 4px; padding: 3px 6px; border-radius: 8px; background: var(--btn); }
+    .ctools button.icon { width: 28px; height: 28px; }
+    .ctools button.icon:hover { background: #ffffff14; }
+    .clink { display: inline-flex; gap: 6px; margin-left: 6px; }
+    .clink input { font: inherit; font-size: 13px; color: var(--fg); background: var(--bg); border: 1px solid var(--card-border); border-radius: 6px; padding: 3px 6px; width: 200px; }
+    .cbody { min-height: 160px; padding: 8px 2px 4px; outline: none; overflow-wrap: anywhere; font-size: 14px; line-height: 1.5; }
+    .composer.standalone .cbody { min-height: 260px; }
+    .cbody p { margin: 0 0 0.6em; }
+    .cbody blockquote { margin: 0.4em 0; padding-left: 10px; border-left: 2px solid var(--card-border); color: var(--muted); }
+    .cbody img { max-width: 100%; }
+    .catts { display: flex; flex-wrap: wrap; gap: 6px; }
+    .catts:not(:empty) { padding: 8px 0 2px; border-top: 1px solid var(--border); }
+    .catt { display: inline-flex; align-items: center; gap: 6px; padding: 3px 4px 3px 8px; border-radius: 6px; background: var(--chip); font-size: 12.5px; max-width: 100%; }
+    .catt.busy { padding-right: 8px; color: var(--muted); }
+    .catt svg { width: 14px; height: 14px; flex: none; }
+    .catt .cname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .catt .csize { color: var(--muted); white-space: nowrap; }
+    .catt .x { display: grid; place-items: center; width: 18px; height: 18px; border: 0; border-radius: 50%; background: none; color: var(--muted); padding: 0; }
+    .catt .x svg { width: 11px; height: 11px; }
+    /* Attachments in the reader */
+    .mfoot .att { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 1px solid var(--card-border); border-radius: 6px;
+      background: none; color: var(--fg); font-size: 12.5px; max-width: 260px; }
+    .mfoot .att:hover { background: var(--hover); }
+    .mfoot .att svg { width: 14px; height: 14px; flex: none; color: var(--icon); }
+    .mfoot .att .aname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mfoot .att .asize { color: var(--muted); white-space: nowrap; }
+    .mfoot { flex-wrap: wrap; }
+    .suggest { position: absolute; left: 70px; z-index: 5; min-width: 260px; padding: 4px 0; background: var(--menu); border: 1px solid var(--border);
+      border-radius: 8px; box-shadow: 0 8px 28px #0000004d; }
+    .sitem { display: block; width: 100%; border: 0; background: none; text-align: left; padding: 6px 12px; font-size: 13px; color: var(--fg); }
+    .sitem span { color: var(--muted); }
+    .sitem.on, .sitem:hover { background: var(--hover); }
+    .mhead { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; column-gap: 12px; align-items: start; padding: 12px 14px 6px; }
+    .avatar { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 16px; }
+    .mname { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mname .addr { color: var(--muted); font-weight: 400; font-size: 12.5px; margin-left: 6px; }
+    .mto { color: var(--fg); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+    .mdate { color: var(--fg); font-size: 13px; white-space: nowrap; }
+    /* Contacts app: list (with letter headings) | detail card, after Fastmail's */
+    .split { display: none; height: 100%; grid-template-columns: 240px minmax(0, 1fr); }
+    body[data-app="contacts"] #contactsView, body[data-app="masked"] #maskedView { display: grid; }
+    body[data-app="contacts"] #slider, body[data-app="masked"] #slider, body[data-app="calendar"] #slider, body[data-app="files"] #slider,
+    body[data-app="settings"] #slider, body[data-app="help"] #slider { display: none; }
+    /* Settings and Help: the shared settings sections (assets/settings.css) as cards. */
+    .appview.settings { display: none; height: 100%; overflow-y: auto; box-sizing: border-box; background: var(--bg); }
+    .appview.settings section { background: none; border-radius: 0; padding: 14px 18px; margin: 0; }
+    /* Settings: tabs like the mail list's, one section at a time. */
+    .settabs { position: sticky; top: 0; z-index: 2; margin: 0; padding: 0 18px; gap: 18px; background: var(--bg); border-bottom: 1px solid var(--border); }
+    .settabs button { border: 0; background: none; padding: 11px 0 9px; font-size: 14px; font-weight: 600; color: var(--muted); border-bottom: 2px solid transparent; cursor: pointer; }
+    .settabs button.on { color: var(--fg); border-bottom-color: var(--accent); }
+    #settingsView section:not(.on), #helpView section:not(.on) { display: none; }
+    /* The tab names the section. */
+    #settingsView h2, #helpView h2 { display: none; }
+    #settingsView:has(#vacation[hidden]) [data-st="vacation"] { display: none; }
+    body[data-app="settings"] #settingsView, body[data-app="help"] #helpView { display: block; }
+    .connsum .pill { margin: 10px 6px 0 0; }
+    #connSummary { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-size: 13px; }
+    #connSummary dt { color: var(--muted); }
+    #connSummary dd { margin: 0; }
+    #connSummary .tag { font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; padding: 1px 6px; border-radius: 4px; background: var(--chip); margin-left: 6px; }
+    /* Calendar (EventCalendar inside, themed through its CSS variables) */
+    #calendarView { display: none; position: relative; height: 100%; flex-direction: column; min-height: 0; }
+    /* Files */
+    #filesView { display: none; position: relative; height: 100%; flex-direction: column; min-height: 0; }
+    body[data-app="files"] #filesView { display: flex; }
+    .ftrail { display: flex; align-items: center; gap: 2px; min-width: 0; overflow: hidden; font-size: 15px; font-weight: 700; white-space: nowrap; }
+    .ftrail button { border: 0; background: none; color: var(--muted); font: inherit; padding: 2px 4px; border-radius: 4px; cursor: pointer; }
+    .ftrail button:hover { color: var(--fg); background: var(--hover); }
+    .ftrail .here { padding: 2px 4px; overflow: hidden; text-overflow: ellipsis; }
+    .ftrail .sep { color: var(--muted); font-weight: 400; }
+    .fquota { color: var(--muted); font-size: 12px; white-space: nowrap; }
+    #filesMsg { padding: 24px 16px; }
+    #filesMsg p { margin: 0 0 12px; }
+    .flist { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; min-height: 0; }
+    .frow { display: grid; grid-template-columns: 20px minmax(0, 1fr) 70px 90px; align-items: center; column-gap: 10px; padding: 7px 14px;
+      border-bottom: 1px solid var(--border); cursor: pointer; user-select: none; font-size: 13.5px; }
+    .frow:hover, .frow.sel { background: var(--sel); }
+    .frow .ficon { display: grid; color: var(--icon); }
+    .frow.folder .ficon { color: var(--accent); }
+    .frow .ficon svg { width: 17px; height: 17px; }
+    .frow .fname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .frow.folder .fname { font-weight: 600; }
+    .frow .fsize, .frow .fdate { color: var(--muted); font-size: 12px; text-align: right; white-space: nowrap; }
+    .frow { position: relative; }
+    /* Row actions on hover, as in the mail list: see-through backing, colour alone on hover. */
+    .factions { position: absolute; right: 4px; top: 0; bottom: 0; display: none; align-items: center; padding-left: 10px;
+      background: color-mix(in srgb, var(--sel) 82%, transparent); }
+    .frow:hover .factions { display: flex; }
+    .frow.naming .factions { display: none; }
+    .factions button { display: grid; place-items: center; width: 32px; height: 100%; border: 0; background: none; color: var(--icon); cursor: pointer; }
+    .factions button:hover { color: var(--fg); }
+    .factions svg { width: 16px; height: 16px; }
+    .frow.moving { opacity: 0.55; }
+    .fnameinput { font: inherit; font-size: 13.5px; color: var(--fg); background: var(--bg); border: 1px solid var(--accent); border-radius: 5px; padding: 2px 6px; min-width: 0; }
+    .fbar { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-top: 1px solid var(--border); background: var(--bar-2, var(--hover)); font-size: 13px; }
+    .fbar .ftext { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .fbar .ftext.err { color: #e5484d; }
+    .fbar .pill { height: 28px; font-size: 13px; }
+    .ffoot { display: flex; justify-content: flex-end; padding: 5px 12px; border-top: 1px solid var(--border); }
+    .ffoot:has(.fquota:empty) { display: none; }
+    .fdrop { display: none; position: absolute; inset: 8px; z-index: 14; place-items: center; border: 2px dashed var(--accent); border-radius: 10px;
+      background: color-mix(in srgb, var(--accent) 12%, var(--bg)); color: var(--fg); font-weight: 600; pointer-events: none; }
+    #filesView.dropping .fdrop { display: grid; }
+    .fempty { padding: 24px 16px; color: var(--muted); list-style: none; }
+    .fpreview { position: absolute; inset: 0; z-index: 15; display: flex; flex-direction: column; background: var(--bg); }
+    .fphead { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+    .fphead .fpname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+    .fphead .icon { border: 0; background: none; color: var(--icon); font-size: 20px; line-height: 1; padding: 0 4px; cursor: pointer; }
+    .fpbody { flex: 1; min-height: 0; display: grid; place-items: center; padding: 12px; overflow: auto; color: var(--muted); }
+    .fpbody img { max-width: 100%; max-height: 100%; object-fit: contain; image-rendering: auto; background: repeating-conic-gradient(#8882 0 25%, transparent 0 50%) 0 0 / 16px 16px; }
+    body[data-app="calendar"] #calendarView { display: flex; }
+    .calbar { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+    .calbar h2 { margin: 0; font-size: 16px; font-weight: 700; white-space: nowrap; }
+    .calbar button.icon { display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 6px; background: none; color: var(--icon); }
+    .calbar button.icon:hover { background: var(--hover); }
+    .calbar button.icon svg { width: 17px; height: 17px; }
+    .calbar .calnext svg { transform: scaleX(-1); }
+    .calviews { display: inline-flex; background: var(--btn); border-radius: 6px; padding: 2px; margin-right: 6px; }
+    .calviews button { border: 0; background: none; color: var(--btn-fg); font-size: 12.5px; padding: 4px 10px; border-radius: 4px; }
+    .calviews button.on { background: var(--bg); color: var(--fg); font-weight: 600; }
+    /* Calendars as chips: colour dot and name; off ones dim with a hollow dot. */
+    .calchips { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--border); }
+    .calchip { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border: 1px solid var(--border); border-radius: 12px;
+      background: none; color: var(--fg); font-size: 12.5px; cursor: pointer; }
+    .calchip:hover { background: var(--hover); }
+    .calchip .cdot { width: 9px; height: 9px; border-radius: 50%; background: var(--cal); border: 1.5px solid var(--cal); box-sizing: border-box; }
+    .calchip.off { color: var(--muted); }
+    .calchip.off .cdot { background: none; }
+    #calHost { flex: 1; min-height: 0; }
+    #calendarView.loading #calHost { opacity: 0.7; }
+    #calMsg { padding: 24px 16px; }
+    #calMsg p { margin: 0 0 12px; }
+    .calevent { position: absolute; right: 12px; top: 56px; z-index: 15; width: 300px; max-height: calc(100% - 70px); overflow-y: auto; padding: 12px 14px;
+      background: var(--menu); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 28px #0000004d; }
+    .calevent .cehead { display: flex; align-items: flex-start; gap: 8px; }
+    .calevent .cedot { width: 12px; height: 12px; border-radius: 3px; margin-top: 4px; flex: none; }
+    .calevent h3 { flex: 1; margin: 0; font-size: 15px; overflow-wrap: anywhere; }
+    .calevent .icon { border: 0; background: none; color: var(--icon); font-size: 18px; line-height: 1; padding: 0 4px; }
+    .calevent .cerow { margin-top: 6px; font-size: 13px; }
+    .calevent .muted { color: var(--muted); }
+    .calevent .cenotes { margin-top: 8px; white-space: pre-wrap; font-size: 13px; overflow-wrap: anywhere; }
+    .calevent .ceactions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 12px; }
+    .calevent .ceactions .pill { height: 28px; font-size: 13px; }
+    .calevent .ceask { margin-right: auto; font-size: 13px; }
+    .calevent .ceerr { color: #e5484d; font-size: 12.5px; margin-top: 8px; }
+    .calevent .ceactions .ceerr { margin: 0 auto 0 0; }
+    .pill.danger { background: #d93a3f; color: #fff; }
+    .calevent.editing { width: 360px; }
+    .ceform input:not([type="checkbox"]), .ceform select, .ceform textarea { font: inherit; font-size: 13px; color: var(--fg); background: var(--bg); border: 1px solid var(--card-border);
+      border-radius: 6px; padding: 4px 7px; color-scheme: inherit; min-width: 0; box-sizing: border-box; }
+    .ceform input:focus, .ceform select:focus, .ceform textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: -1px; }
+    .ceform .cetitle { width: 100%; font-size: 15px; font-weight: 600; padding: 6px 8px; }
+    .ceform .cegrid { display: grid; grid-template-columns: 70px minmax(0, 1fr); align-items: center; gap: 7px 8px; margin-top: 10px; font-size: 13px; }
+    .ceform .cegrid > span { color: var(--muted); }
+    .ceform .ceall { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+    .ceform .ceall input { margin: 0; accent-color: var(--accent); width: 13px; height: 13px; }
+    .ceform .cewhen { display: flex; gap: 6px; }
+    .ceform .cewhen input[type="date"] { flex: 1; }
+    .ceform .cewhen input[type="time"] { width: 96px; }
+    .ceform .cealarms { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
+    .ceform .cealarm { display: flex; align-items: center; gap: 2px; width: 100%; }
+    .ceform .cealarm select { flex: 1; }
+    .ceform .cealarm .icon { font-size: 16px; }
+    .ceform button.link { border: 0; background: none; padding: 2px 0; color: var(--accent); font: inherit; font-size: 13px; cursor: pointer; }
+    .ceform textarea { width: 100%; margin-top: 10px; resize: vertical; }
+    /* #calHost beats the vendor stylesheet, which loads later with the same specificity. */
+    #calHost.ec, #calHost .ec { color-scheme: inherit; --ec-color-50: var(--bg); --ec-color-100: var(--hover); --ec-color-200: var(--hover); --ec-color-300: var(--border); --ec-color-400: var(--muted);
+      --ec-bg-color: var(--bg); --ec-text-color: var(--fg); --ec-border-color: var(--border); --ec-today-bg-color: color-mix(in srgb, var(--accent) 12%, var(--bg));
+      --ec-highlight-color: var(--hover); --ec-event-text-color: #fff; --ec-popup-bg-color: var(--menu); --ec-now-indicator-color: #e5484d;
+      --ec-button-bg-color: var(--btn); --ec-button-border-color: var(--border); --ec-button-text-color: var(--btn-fg); color: var(--fg); font-size: 12.5px; height: 100%; }
+    /* Day headings: just a line under them, on the panel's own background. */
+    #calHost .ec-list .ec-day-head { background: var(--bg); color: var(--muted); font-weight: 600; padding: 4px 16px; border-bottom: 1px solid var(--border); }
+    #calHost .ec-list .ec-event { padding: 6px 16px; cursor: pointer; }
+    #calHost .ec-list .ec-event:hover { background: var(--hover); }
+    #calHost .ec-list .ec-event-title { font-size: 13.5px; }
+    #calHost .ec-col-head, #calHost .ec-sidebar, #calHost .ec-day-head { color: var(--muted); }
+    /* Compact events: small cells, so little padding, and time and title on one line where they fit. */
+    #calHost .ec-event { cursor: pointer; padding: 1px 4px; border-radius: 4px; box-shadow: none; }
+    #calHost .ec-time-grid .ec-event { font-size: 11.5px; line-height: 1.3; }
+    #calHost .ec-time-grid .ec-event-body { flex-direction: row; flex-wrap: wrap; column-gap: 4px; align-content: flex-start; min-width: 0; overflow: hidden; }
+    #calHost .ec-event-time, #calHost .ec-event-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    /* The week fits the dropdown's width: no sideways scrolling. */
+    #calHost .ec-time-grid .ec-main { overflow-x: hidden; }
+    #calHost .ec-event-time { margin: 0; opacity: 0.75; }
+    /* Week cells: the title first (it's what you look for), then the time if it fits. */
+    #calHost .ec-time-grid .ec-event-title { order: -1; font-weight: 600; position: static; white-space: nowrap; max-width: 100%; }
+    #calHost .ec-draft { outline: 1.5px dashed var(--cal); outline-offset: -1.5px; }
+    .caltip { position: fixed; z-index: 30; max-width: 260px; padding: 6px 9px; font-size: 12.5px; line-height: 1.4; pointer-events: none;
+      background: var(--menu); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 14px #00000040; }
+    .caltip .muted { color: var(--muted); }
+    #calHost .ec-list .ec-event { background: none; }
+    #calHost .ec-event-tag { background-color: var(--cal) !important; }
+    /* Masked Email */
+    .mfilter { display: flex; gap: 14px; padding: 6px 2px 0; }
+    .mfilter button { border: 0; background: none; padding: 0 0 4px; font-size: 12.5px; font-weight: 600; color: var(--muted); border-bottom: 2px solid transparent; }
+    .mfilter button.on { color: var(--fg); border-bottom-color: var(--accent); }
+    .mfilter button span { font-weight: 400; }
+    .mnew { margin-left: auto; }
+    .mavatar { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; flex: none; background: #1d4f57; color: #a3dbe3; }
+    .mavatar svg { width: 18px; height: 18px; }
+    .mavatar.big { width: 72px; height: 72px; }
+    .mavatar.big svg { width: 36px; height: 36px; }
+    .crow.off .mavatar, .mavatar.off { background: var(--btn); color: var(--muted); }
+    .crow.off .cname { color: var(--muted); }
+    #maskedView .crow { position: relative; }
+    .mmeta { margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; flex: none; }
+    .myear { font-size: 11.5px; color: var(--muted); }
+    .mdot { width: 8px; height: 8px; border-radius: 50%; background: var(--dot-push); }
+    .mstate { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 4px; background: var(--btn); color: var(--muted); text-transform: capitalize; }
+    .mstate.enabled { background: #22a34a2e; color: var(--dot-push); }
+    .mtoggle { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); display: none; height: 26px; padding: 0 10px;
+      border: 0; border-radius: 6px; background: var(--btn); color: var(--btn-fg); font-size: 12px; }
+    #maskedView .crow:hover .mtoggle { display: block; }
+    #maskedView .crow:hover .mmeta { visibility: hidden; }
+    .mform { display: grid; gap: 12px; }
+    .mform label { display: grid; gap: 4px; font-size: 12.5px; color: var(--muted); }
+    .mform input { font: inherit; font-size: 14px; color: var(--fg); background: var(--bg); border: 1px solid var(--card-border); border-radius: 6px; padding: 7px 9px; }
+    .pill.primary { background: var(--accent); color: var(--accent-fg); }
+    .pill[aria-disabled="true"].primary { background: var(--btn); color: var(--btn-fg); }
+    .clist { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--border); }
+    .ctop { padding: 8px 10px 6px; border-bottom: 1px solid var(--border); }
+    .ctop .search { width: auto; margin: 0; }
+    .cmeta { font-size: 12px; color: var(--muted); padding: 6px 2px 0; }
+    #cbody, #mbody { flex: 1; min-height: 0; overflow-y: auto; padding: 0 6px 8px; }
+    #mbody { padding-top: 6px; }
+    .cletter { font-weight: 700; font-size: 12.5px; color: var(--muted); padding: 10px 8px 4px; }
+    .crow { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; cursor: pointer; }
+    .crow:hover { background: var(--hover); }
+    .crow.sel { background: var(--sel); }
+    .cavatar { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; flex: none; color: #fff; font-weight: 700; font-size: 12.5px; }
+    .cavatar.big { width: 72px; height: 72px; font-size: 26px; }
+    .cmain { display: flex; flex-direction: column; min-width: 0; }
+    .cname { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .csub { color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .cdetail { display: flex; flex-direction: column; min-height: 0; }
+    .cscroll { flex: 1; overflow-y: auto; padding: 12px; }
+    .ccard { position: relative; border: 1px solid var(--card-border); border-radius: 10px; padding: 18px 18px 8px; box-shadow: 0 1px 6px #0000002e; }
+    .cstar { position: absolute; top: 14px; right: 14px; color: var(--icon); display: grid; }
+    .cstar svg { width: 18px; height: 18px; }
+    .cstar.on { color: #f5b81c; }
+    .cstar.on svg { fill: currentColor; }
+    .chead { display: flex; gap: 16px; align-items: center; margin-bottom: 16px; }
+    .chead-main { min-width: 0; }
+    .chead h2 { margin: 0; font-size: 20px; font-weight: 700; overflow-wrap: anywhere; padding-right: 20px; }
+    .csubhead { color: var(--muted); font-size: 13px; margin-top: 2px; }
+    .cactions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+    .pill { white-space: nowrap; }
+    .cactions .pill { text-decoration: none; }
+    .csection { font-weight: 700; margin: 4px 0 6px; }
+    .crow-d { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid var(--border); }
+    .cico { display: grid; color: var(--icon); }
+    .cico svg { width: 17px; height: 17px; }
+    .cval { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    .clabel { font-size: 12px; color: var(--muted); }
+    .cv { overflow-wrap: anywhere; }
+    .cv a { color: inherit; text-decoration: none; }
+    .cv a:hover { text-decoration: underline; }
+    .cnotes.empty { color: var(--muted); }
+    .ccopy { display: grid; border: 0; background: none; padding: 4px; border-radius: 6px; color: var(--icon); visibility: hidden; }
+    .crow-d:hover .ccopy { visibility: visible; }
+    .ccopy:hover { background: var(--hover); color: var(--icon-hover); }
+    .ccopy svg { width: 15px; height: 15px; }
+    .mfoot { display: flex; gap: 8px; align-items: center; padding: 10px 14px; border-top: 1px solid var(--card-border); }
+    #images[hidden] { display: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="brand">
+      <button id="apps" class="logo-btn" title="Fastmail shortcuts" aria-haspopup="menu" aria-expanded="false"><span class="logo-pill"><img class="logo" src="/logo-mark.svg" alt="Fastmail shortcuts"><span class="logo-chev" data-icon="down"></span></span></button>
+      <span id="account" class="account"></span>
+      <span id="unreadCount" class="acount" title="Unread in Inbox"></span>
+      <span id="dot" class="dot"></span>
+    </span>
+    <span>
+      <button id="refresh" class="icon" data-icon="refresh" title="Refresh (u)"></button>
+      <button id="lockBtn" class="icon" data-icon="lock" title="Lock now" hidden></button>
+      <button id="dndBtn" class="icon" data-icon="bellOff" title="Do Not Disturb" aria-haspopup="menu" aria-expanded="false"></button>
+      <button id="popout" class="icon" data-icon="popout" title="Pop out into a window"></button>
+    </span>
+    <div id="appsMenu" class="apps-menu" role="menu" hidden>
+      <div class="head">Fastmail shortcuts</div>
+      <button class="app" role="menuitem" data-icon="mail" data-app="mail">Mail</button>
+      <button class="app" role="menuitem" data-icon="users" data-app="contacts">Contacts</button>
+      <button class="app" role="menuitem" data-icon="calendar" data-app="calendar">Calendar</button>
+      <button class="app" role="menuitem" data-icon="notes" data-app="notes">Notes</button>
+      <button class="app" role="menuitem" data-icon="cloud" data-app="files">Files</button>
+      <button class="app" role="menuitem" data-icon="settings" data-app="settings">Settings</button>
+    </div>
+    <div id="menu" role="menu" hidden>
+      <div class="head">Do Not Disturb <span id="dndState"></span></div>
+      <button class="mi" role="menuitem" data-dnd="30m">For 30 minutes</button>
+      <button class="mi" role="menuitem" data-dnd="1h">For 1 hour</button>
+      <button class="mi" role="menuitem" data-dnd="tomorrow">Until tomorrow 8:00</button>
+      <button class="mi" role="menuitem" data-dnd="off" id="dndOff">Turn off</button>
+    </div>
+  </header>
+  <nav class="rail" aria-label="Apps">
+    <button class="rail-btn on" id="railMail" data-icon="mail" title="Mail"></button>
+    <button class="rail-btn" id="railCompose" data-icon="compose" title="Compose (c)" hidden></button>
+    <button class="rail-btn" id="railContacts" data-icon="users" title="Contacts"></button>
+    <button class="rail-btn" id="railCalendar" data-icon="calendar" title="Calendar"></button>
+    <button class="rail-btn" id="railFiles" data-icon="cloud" title="Files"></button>
+    <button class="rail-btn" id="railMasked" data-icon="mask" title="Masked Email"></button>
+    <span class="spacer"></span>
+    <button class="rail-btn" id="railSettings" data-icon="settings" title="Settings"></button>
+    <button class="rail-btn" id="railHelp" data-icon="help" title="Help: keyboard shortcuts and about"></button>
+  </nav>
+  <main id="panel">
+    <div id="slider">
+      <section id="listPane">
+        <div class="listbar">
+          <input type="checkbox" class="cb" id="selAll" aria-label="Select all">
+          <nav class="tabs" data-pref="view">
+            <span class="ftab"><button data-v="inbox" title="Click again for folders (g)"><span id="folderName">Inbox</span><span id="folderBtn" class="fcaret" data-icon="down"
+              title="Go to folder (g)" aria-haspopup="menu" aria-expanded="false"></span></button>
+              <div id="folderMenu" class="dropmenu" role="menu" hidden>
+                <input id="folderFilter" type="text" placeholder="Go to folder…" autocomplete="off">
+                <div id="folderList"></div>
+              </div></span>
+            <button data-v="unread">Unread</button>
+            <button data-v="pinned">Pinned</button>
+            <button data-v="vips">VIPs</button>
+            <button data-v="all" title="All mail (not Trash or Spam)">All</button>
+          </nav>
+          <div class="bulk" id="bulk" hidden>
+            <span class="n" id="bulkCount"></span>
+            <button class="pill write" data-icon="archive" data-act="archive" title="Archive (y)">Archive</button>
+            <button class="pill write" data-icon="trash" data-act="delete" title="Delete (d)">Delete</button>
+            <button class="pill write" data-icon="mailOpen" data-act="read" title="Mark read (Shift+I)">Mark read</button>
+            <button class="pill write" data-icon="move" data-move title="Move to (m)">Move to</button>
+          </div>
+          <label class="search" title="Search (/)">
+            <span data-icon="search"></span>
+            <input id="q" type="search" placeholder="Search" autocomplete="off">
+            <button id="qClear" data-icon="x" title="Clear search (Esc)" hidden></button>
+          </label>
+        </div>
+        <div id="body"></div>
+        <button id="compose" class="fab" data-icon="compose" aria-disabled="true">Compose</button>
+        <div id="moveMenu" class="dropmenu" role="menu" hidden>
+          <input id="moveFilter" type="text" placeholder="Move to…" autocomplete="off">
+          <div id="moveList"></div>
+        </div>
+        <div id="toast" class="toast" role="status" aria-live="polite" hidden>
+          <span id="toastMsg"></span>
+          <button id="toastUndo" class="tbtn" title="Undo (z)">Undo</button>
+          <button id="toastClose" class="tx" data-icon="x" title="Dismiss"></button>
+        </div>
+      </section>
+      <section id="readPane" aria-live="polite">
+        <div class="bar">
+          <button id="back" class="pill icon-only" data-icon="back" title="Back to list (u, Esc)"></button>
+          <button id="saveDraft" class="pill cnew" title="Save to Drafts">Save draft</button>
+          <button id="discardDraft" class="pill cnew" data-icon="trash" title="Discard this message">Discard</button>
+          <button class="pill write" data-icon="archive" data-act="archive" title="Archive (y)">Archive</button>
+          <button class="pill write" data-icon="trash" data-act="delete" title="Delete (d)">Delete</button>
+          <button class="pill write" data-icon="move" data-move title="Move to (m)">Move to<span class="caret" data-icon="down"></span></button>
+          <span class="rmore-wrap">
+            <button id="rmore" class="pill write" aria-haspopup="menu" aria-expanded="false">More<span class="caret" data-icon="down"></span></button>
+            <div id="rmoreMenu" class="dropmenu" role="menu" hidden>
+              <button class="mi" role="menuitem" data-icon="mail" data-act="unread"><span class="label">Mark unread</span><span class="hint">Shift+U</span></button>
+              <button class="mi" role="menuitem" data-icon="pin" data-act="pin" id="rpin"><span class="label">Pin</span><span class="hint">s</span></button>
+              <button class="mi" role="menuitem" data-icon="spam" data-act="spam"><span class="label">Report spam</span><span class="hint">!</span></button>
+            </div>
+          </span>
+          <span class="spacer"></span>
+          <button id="prev" class="icon" data-icon="up" title="Newer (k)"></button>
+          <button id="next" class="icon" data-icon="down" title="Older (j)"></button>
+        </div>
+        <div id="conv">
+          <div class="rhead">
+            <h2 id="rsubj"></h2>
+            <button id="expandAll" class="icon" data-icon="unfold" title="Expand all" hidden></button>
+            <button id="origToggle" class="icon" data-icon="contrast" title="Show emails in their original colours" hidden></button>
+            <button id="openweb" class="icon" data-icon="external" title="Open Fastmail"></button>
+          </div>
+          <div class="labels" id="rlabels"></div>
+          <div id="msgs"></div>
+          <div class="mfoot convfoot" id="convfoot" hidden>
+            <button class="pill" data-icon="reply" data-compose="reply" title="Reply (r)">Reply</button>
+            <button class="pill" data-icon="replyAll" data-compose="replyAll" title="Reply all (a)">Reply all</button>
+            <button class="pill" data-icon="forward" data-compose="forward" title="Forward (f)">Forward</button>
+          </div>
+          <div id="replyHost"></div>
+        </div>
+        <div id="composeNew"></div>
+      </section>
+    </div>
+    <section id="settingsView" class="appview settings">
+      <nav class="tabs settabs" id="setTabs" aria-label="Settings">
+        <button data-st="secConn">Connection</button><button data-st="secNotify">Notifications</button><button data-st="secLook">Appearance</button><button data-st="vacation">Vacation</button><button data-st="secUpdates">Updates</button>
+      </nav>
+      <section class="connsum" id="secConn">
+        <h2>Connection</h2>
+        <div id="connSummary"></div>
+        <button class="pill" id="openConnection">Connection &amp; security ↗</button>
+        <button class="pill" id="lockNow" data-icon="lock" hidden>Lock now</button>
+      </section>
+      <div id="setSections"></div>
+    </section>
+    <section id="helpView" class="appview settings">
+      <nav class="tabs settabs" id="helpTabs" aria-label="Help">
+        <button data-st="helpAbout">About</button><button data-st="helpKeyboard">Keyboard</button>
+      </nav>
+      <section id="helpKeyboard">
+        <h2>Keyboard shortcuts</h2>
+        <div id="helpKeys"></div>
+        <span class="help">They follow Fastmail's, so the same keys work in both.</span>
+        <a class="ext" href="https://www.fastmail.help/hc/en-us/articles/360058753534-Keyboard-shortcuts" target="_blank" rel="noopener noreferrer">Fastmail's keyboard shortcuts ↗</a>
+      </section>
+      <section id="helpAbout">
+        <h2>About</h2>
+        <div id="about"></div>
+      </section>
+    </section>
+    <section id="filesView">
+      <div class="calbar filesbar">
+        <button class="icon" id="filesUp" data-icon="back" title="Up (u)" hidden></button>
+        <nav id="filesTrail" class="ftrail" aria-label="Folder"></nav>
+        <span class="spacer"></span>
+        <button class="pill" id="filesNew" title="New folder">New folder</button>
+        <button class="pill primary" id="filesUpload" title="Upload files (or drop them here)">Upload</button>
+        <input type="file" id="filesInput" multiple hidden>
+      </div>
+      <div id="filesMsg" class="msg" hidden></div>
+      <ul id="filesList" class="flist"></ul>
+      <div id="filesBar" class="fbar" hidden></div>
+      <div class="ffoot"><span id="filesQuota" class="fquota"></span></div>
+      <div class="fdrop">Drop to upload here</div>
+      <div id="filesPreview" class="fpreview" hidden></div>
+    </section>
+    <section id="calendarView">
+      <div class="calbar">
+        <h2 id="calTitle"></h2>
+        <span class="spacer"></span>
+        <button class="pill primary" id="calNew" title="New event (c)" hidden>New event</button>
+        <nav class="calviews" aria-label="View">
+          <button data-cv="list" title="Agenda (a)">Agenda</button><button data-cv="week" title="Week (w)">Week</button><button data-cv="month" title="Month (m)">Month</button>
+        </nav>
+        <button class="icon" id="calPrev" data-icon="back" title="Previous (k)"></button>
+        <button class="pill" id="calToday" title="Today (t)">Today</button>
+        <button class="icon calnext" id="calNext" data-icon="back" title="Next (j)"></button>
+      </div>
+      <div id="calChips" class="calchips" hidden></div>
+      <div id="calHost"></div>
+      <div id="calMsg" class="msg" hidden></div>
+      <div id="calEvent" class="calevent" hidden></div>
+      <div id="calTip" class="caltip" hidden></div>
+    </section>
+    <div id="contactsView" class="split">
+      <div class="clist">
+        <div class="ctop">
+          <label class="search" title="Search contacts (/)">
+            <span data-icon="search"></span>
+            <input id="cq" type="search" placeholder="Search contacts" autocomplete="off">
+          </label>
+          <div class="cmeta">Contacts<span id="ccount"></span></div>
+        </div>
+        <div id="cbody"></div>
+      </div>
+      <div class="cdetail">
+        <div class="bar"><button class="pill write" data-icon="edit" disabled>Edit</button></div>
+        <div class="cscroll">
+          <div id="cdetailCard" class="ccard" hidden></div>
+          <div id="cempty" class="msg">Select a contact</div>
+        </div>
+      </div>
+    </div>
+    <div id="maskedView" class="split">
+      <div class="clist">
+        <div class="ctop">
+          <label class="search" title="Search masked emails (/)">
+            <span data-icon="search"></span>
+            <input id="mq" type="search" placeholder="Search masked emails" autocomplete="off">
+          </label>
+          <div class="mfilter" id="mfilter">
+            <button data-f="all" class="on">All<span></span></button>
+            <button data-f="enabled">Enabled<span></span></button>
+            <button data-f="disabled">Disabled<span></span></button>
+          </div>
+        </div>
+        <div id="mbody"></div>
+      </div>
+      <div class="cdetail">
+        <div class="bar"><button class="pill mnew" id="mnew" data-icon="plus">New</button></div>
+        <div class="cscroll">
+          <div id="mdetailCard" class="ccard" hidden></div>
+          <div id="mempty" class="msg">Select a masked email</div>
+        </div>
+      </div>
+    </div>
+  </main>
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>

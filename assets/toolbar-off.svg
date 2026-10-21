@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="12 12 104 104">
+  <!-- Toolbar icon while locked or not set up: the envelope tinted red. -->
+  <defs><clipPath id="env"><rect x="18" y="28" width="92" height="72" rx="10"/></clipPath></defs>
+  <rect x="18" y="28" width="92" height="72" rx="10" fill="#e03131"/>
+  <g clip-path="url(#env)">
+    <path d="M18 28 H64 V74 Z" fill="#ff8a8a"/>
+    <path d="M64 28 H110 L64 74 Z" fill="#a61e1e"/>
+  </g>
+  <rect x="18" y="28" width="92" height="72" rx="10" fill="none" stroke="#6e1212" stroke-width="5"/>
+</svg>
